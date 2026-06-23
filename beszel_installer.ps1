@@ -49,11 +49,16 @@ if ([string]::IsNullOrWhiteSpace($Url) -or [string]::IsNullOrWhiteSpace($Key) -o
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
-    Write-Host "Suppression de l'ancien service..." -ForegroundColor Yellow
+    Write-Host "Suppression de l'ancien service Windows..." -ForegroundColor Yellow
     sc.exe stop $ServiceName | Out-Null
     Start-Sleep -Seconds 2
     sc.exe delete $ServiceName | Out-Null
     Start-Sleep -Seconds 2
+}
+if (Get-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue) {
+    Write-Host "Suppression de l'ancienne tache planifiee..." -ForegroundColor Yellow
+    Stop-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $ServiceName -Confirm:$false
 }
 
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
@@ -83,60 +88,58 @@ if (-not (Test-Path $ExePath)) {
     }
 }
 
-# ---------- Creation du service ----------
-Write-Host "Creation du service Windows..." -ForegroundColor Cyan
+# ---------- Creation de la tache planifiee ----------
+Write-Host "Creation de la tache planifiee..." -ForegroundColor Cyan
 
-sc.exe create $ServiceName binPath= "`"$ExePath`"" start= auto DisplayName= "Beszel Agent" | Out-Null
-sc.exe description $ServiceName "Agent de monitoring Beszel" | Out-Null
+# Script wrapper qui injecte les variables d'environnement avant de lancer le binaire.
+# Evite de polluer les variables machine et contourne le probleme d'API Windows Service.
+$WrapperPath = Join-Path $InstallDir "start-agent.ps1"
+@"
+`$env:KEY     = '$($Key   -replace "'", "''")'
+`$env:PORT    = '$Port'
+`$env:HUB_URL = '$($Url   -replace "'", "''")'
+`$env:TOKEN   = '$($Token -replace "'", "''")'
+& '$($ExePath -replace "'", "''")'
+"@ | Set-Content -Path $WrapperPath -Encoding UTF8
 
-# Variables d'environnement injectees directement dans le registre du service
-# (evite de polluer les variables machine)
-$regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
-New-ItemProperty -Path $regPath -Name "Environment" -PropertyType MultiString -Force -Value @(
-    "KEY=$Key",
-    "PORT=$Port",
-    "HUB_URL=$Url",
-    "TOKEN=$Token"
-) | Out-Null
+$action    = New-ScheduledTaskAction `
+                 -Execute   "powershell.exe" `
+                 -Argument  "-NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$WrapperPath`""
+$trigger   = New-ScheduledTaskTrigger -AtStartup
+$settings  = New-ScheduledTaskSettingsSet `
+                 -ExecutionTimeLimit ([TimeSpan]::Zero) `
+                 -RestartCount 3 `
+                 -RestartInterval (New-TimeSpan -Minutes 1) `
+                 -StartWhenAvailable
+$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
 
-sc.exe failure $ServiceName reset= 0 actions= restart/5000/restart/5000/restart/5000 | Out-Null
+Register-ScheduledTask -TaskName    $ServiceName `
+                       -Action      $action `
+                       -Trigger     $trigger `
+                       -Settings    $settings `
+                       -Principal   $principal `
+                       -Description "Agent de monitoring Beszel" `
+                       -Force | Out-Null
 
 # ---------- Demarrage ----------
-Write-Host "Demarrage du service..." -ForegroundColor Cyan
-Start-Sleep -Seconds 1
-$startOut  = sc.exe start $ServiceName 2>&1
-$startCode = $LASTEXITCODE
-if ($startCode -ne 0) {
-    Write-Host "sc.exe start a retourne le code $startCode :" -ForegroundColor Yellow
-    $startOut | ForEach-Object { Write-Host "  $_" }
-}
+Write-Host "Demarrage de la tache..." -ForegroundColor Cyan
+Start-ScheduledTask -TaskName $ServiceName
 Start-Sleep -Seconds 3
 
 # ---------- Verification ----------
-$svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-if ($svc -and $svc.Status -eq "Running") {
+$task = Get-ScheduledTask     -TaskName $ServiceName -ErrorAction SilentlyContinue
+$info = Get-ScheduledTaskInfo -TaskName $ServiceName -ErrorAction SilentlyContinue
+if ($task -and $task.State -eq "Running") {
     Write-Host "`nOK - L'agent Beszel est installe et demarre." -ForegroundColor Green
     Write-Host "Dossier : $InstallDir"
     Write-Host "Hub     : $Url"
     Write-Host "Port    : $Port"
 } else {
-    Write-Host "`nService cree mais non demarre (statut : $($svc.Status))." -ForegroundColor Red
-
-    Write-Host "`n-- Evenements SCM (log System) --" -ForegroundColor Yellow
-    Get-WinEvent -LogName System -MaxEvents 30 -ErrorAction SilentlyContinue |
-        Where-Object { $_.ProviderName -eq 'Service Control Manager' -and $_.Message -match $ServiceName } |
-        Select-Object -First 5 |
-        ForEach-Object { Write-Host "  [$($_.TimeCreated)] $($_.Message)" }
-
-    Write-Host "`n-- Test du binaire hors service (pour voir l'erreur reelle) --" -ForegroundColor Yellow
-    Write-Host "  Copiez-collez ces lignes dans une console admin :" -ForegroundColor Gray
+    $lastCode = if ($info) { "0x{0:X8}" -f $info.LastTaskResult } else { "inconnu" }
+    Write-Host "`nTache creee mais non demarree (etat: $($task.State), code: $lastCode)." -ForegroundColor Red
+    Write-Host "Testez le binaire directement dans une console admin :" -ForegroundColor Yellow
     Write-Host "  `$env:KEY='$Key'; `$env:PORT='$Port'; `$env:HUB_URL='$Url'; `$env:TOKEN='$Token'" -ForegroundColor Gray
     Write-Host "  & '$ExePath'" -ForegroundColor Gray
-
-    Write-Host "`n-- Si le binaire ne supporte pas l'API Windows Service --" -ForegroundColor Yellow
-    Write-Host "  Installez NSSM (https://nssm.cc) puis :" -ForegroundColor Gray
-    Write-Host "  sc.exe delete $ServiceName" -ForegroundColor Gray
-    Write-Host "  nssm install $ServiceName '$ExePath'" -ForegroundColor Gray
-    Write-Host "  nssm set $ServiceName AppEnvironmentExtra KEY='$Key' PORT=$Port HUB_URL='$Url' TOKEN='$Token'" -ForegroundColor Gray
-    Write-Host "  nssm start $ServiceName" -ForegroundColor Gray
+    Write-Host "Journal du planificateur :" -ForegroundColor Yellow
+    Write-Host "  Get-WinEvent -LogName 'Microsoft-Windows-TaskScheduler/Operational' -MaxEvents 20" -ForegroundColor Gray
 }
