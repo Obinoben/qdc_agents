@@ -115,16 +115,16 @@ if (-not (Test-Path $ExePath)) {
 # ---------- Creation de la tache planifiee ----------
 Write-Host "Creation de la tache planifiee..." -ForegroundColor Cyan
 
-# Script wrapper qui injecte les variables d'environnement avant de lancer le binaire.
-# Evite de polluer les variables machine et contourne le probleme d'API Windows Service.
+# Script wrapper statique : lit config.json au demarrage, pas de valeurs en dur.
 $WrapperPath = Join-Path $InstallDir "start-agent.ps1"
-@"
-`$env:KEY     = '$($Key   -replace "'", "''")'
-`$env:PORT    = '$Port'
-`$env:HUB_URL = '$($Url   -replace "'", "''")'
-`$env:TOKEN   = '$($Token -replace "'", "''")'
-& '$($ExePath -replace "'", "''")'
-"@ | Set-Content -Path $WrapperPath -Encoding UTF8
+@'
+$cfg         = Get-Content "$PSScriptRoot\config.json" -Raw | ConvertFrom-Json
+$env:KEY     = $cfg.Key
+$env:PORT    = [string]$cfg.Port
+$env:HUB_URL = $cfg.Url
+$env:TOKEN   = $cfg.Token
+& "$PSScriptRoot\beszel-agent.exe"
+'@ | Set-Content -Path $WrapperPath -Encoding UTF8
 
 $action    = New-ScheduledTaskAction `
                  -Execute   "powershell.exe" `
