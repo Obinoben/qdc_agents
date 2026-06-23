@@ -22,9 +22,29 @@ $ExePath     = Join-Path $InstallDir "beszel-agent.exe"
 $ServiceName = "beszel-agent"
 $Arch        = "amd64"
 $DownloadUrl = "https://github.com/henrygd/beszel/releases/latest/download/beszel-agent_windows_$Arch.zip"
+$ConfigPath  = Join-Path $InstallDir "config.json"
 
 # ---------- Saisie interactive pour les valeurs manquantes ----------
 Write-Host "=== Installation de l'agent Beszel ===" -ForegroundColor Cyan
+
+# Reprise de la configuration existante pour les parametres non fournis en CLI
+if (Test-Path $ConfigPath) {
+    try {
+        $cfg        = Get-Content $ConfigPath -Raw | ConvertFrom-Json
+        $fromConfig = @()
+        if ([string]::IsNullOrWhiteSpace($Key)   -and $cfg.Key)   { $Key   = $cfg.Key;        $fromConfig += 'Key' }
+        if ($Port -eq 0                           -and $cfg.Port)  { $Port  = [int]$cfg.Port;  $fromConfig += 'Port' }
+        if ([string]::IsNullOrWhiteSpace($Url)   -and $cfg.Url)   { $Url   = $cfg.Url;        $fromConfig += 'Url' }
+        if ([string]::IsNullOrWhiteSpace($Token) -and $cfg.Token) { $Token = $cfg.Token;      $fromConfig += 'Token' }
+        if ($fromConfig) {
+            Write-Host "Parametres repris depuis la configuration existante ($($fromConfig -join ', ')) :" -ForegroundColor DarkCyan
+            Write-Host "  Hub  : $Url"
+            Write-Host "  Port : $Port"
+        }
+    } catch {
+        Write-Host "Fichier de configuration existant illisible, saisie requise." -ForegroundColor Yellow
+    }
+}
 
 if ([string]::IsNullOrWhiteSpace($Url)) {
     $Url = Read-Host "URL du hub (ex: https://bes.exemple.com)"
@@ -62,6 +82,10 @@ if (Get-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue) {
 }
 
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+
+# Sauvegarde de la configuration pour les reinstallations futures
+@{ Key = $Key; Port = $Port; Url = $Url; Token = $Token } |
+    ConvertTo-Json | Set-Content -Path $ConfigPath -Encoding UTF8
 
 # ---------- Telechargement ----------
 $ZipPath = Join-Path $env:TEMP "beszel-agent.zip"
