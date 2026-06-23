@@ -104,7 +104,12 @@ sc.exe failure $ServiceName reset= 0 actions= restart/5000/restart/5000/restart/
 # ---------- Demarrage ----------
 Write-Host "Demarrage du service..." -ForegroundColor Cyan
 Start-Sleep -Seconds 1
-sc.exe start $ServiceName | Out-Null
+$startOut  = sc.exe start $ServiceName 2>&1
+$startCode = $LASTEXITCODE
+if ($startCode -ne 0) {
+    Write-Host "sc.exe start a retourne le code $startCode :" -ForegroundColor Yellow
+    $startOut | ForEach-Object { Write-Host "  $_" }
+}
 Start-Sleep -Seconds 3
 
 # ---------- Verification ----------
@@ -115,7 +120,23 @@ if ($svc -and $svc.Status -eq "Running") {
     Write-Host "Hub     : $Url"
     Write-Host "Port    : $Port"
 } else {
-    Write-Host "`nService cree mais non demarre." -ForegroundColor Yellow
-    Write-Host "Verifier avec  : Get-Service $ServiceName" -ForegroundColor Yellow
-    Write-Host "Logs Windows   : Get-EventLog -LogName Application -Newest 20" -ForegroundColor Yellow
+    Write-Host "`nService cree mais non demarre (statut : $($svc.Status))." -ForegroundColor Red
+
+    Write-Host "`n-- Evenements SCM (log System) --" -ForegroundColor Yellow
+    Get-WinEvent -LogName System -MaxEvents 30 -ErrorAction SilentlyContinue |
+        Where-Object { $_.ProviderName -eq 'Service Control Manager' -and $_.Message -match $ServiceName } |
+        Select-Object -First 5 |
+        ForEach-Object { Write-Host "  [$($_.TimeCreated)] $($_.Message)" }
+
+    Write-Host "`n-- Test du binaire hors service (pour voir l'erreur reelle) --" -ForegroundColor Yellow
+    Write-Host "  Copiez-collez ces lignes dans une console admin :" -ForegroundColor Gray
+    Write-Host "  `$env:KEY='$Key'; `$env:PORT='$Port'; `$env:HUB_URL='$Url'; `$env:TOKEN='$Token'" -ForegroundColor Gray
+    Write-Host "  & '$ExePath'" -ForegroundColor Gray
+
+    Write-Host "`n-- Si le binaire ne supporte pas l'API Windows Service --" -ForegroundColor Yellow
+    Write-Host "  Installez NSSM (https://nssm.cc) puis :" -ForegroundColor Gray
+    Write-Host "  sc.exe delete $ServiceName" -ForegroundColor Gray
+    Write-Host "  nssm install $ServiceName '$ExePath'" -ForegroundColor Gray
+    Write-Host "  nssm set $ServiceName AppEnvironmentExtra KEY='$Key' PORT=$Port HUB_URL='$Url' TOKEN='$Token'" -ForegroundColor Gray
+    Write-Host "  nssm start $ServiceName" -ForegroundColor Gray
 }
