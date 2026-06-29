@@ -99,7 +99,9 @@ try {
 
 # ---------- Extraction ----------
 Write-Host "Extraction..." -ForegroundColor Cyan
-Expand-Archive -Path $ZipPath -DestinationPath $InstallDir -Force
+Remove-Item -Path $ExePath -Force -ErrorAction SilentlyContinue
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $InstallDir)
 Remove-Item $ZipPath -Force -ErrorAction SilentlyContinue
 
 if (-not (Test-Path $ExePath)) {
