@@ -99,20 +99,21 @@ try {
 
 # ---------- Extraction ----------
 Write-Host "Extraction..." -ForegroundColor Cyan
-Remove-Item -Path $ExePath -Force -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-[System.IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $InstallDir)
+$TempExtract = Join-Path $env:TEMP "beszel-extract"
+Remove-Item $TempExtract -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path $TempExtract -Force | Out-Null
+[System.IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $TempExtract)
 Remove-Item $ZipPath -Force -ErrorAction SilentlyContinue
 
-if (-not (Test-Path $ExePath)) {
-    $found = Get-ChildItem -Path $InstallDir -Filter "*.exe" -Recurse | Select-Object -First 1
-    if ($found) {
-        Move-Item $found.FullName $ExePath -Force
-    } else {
-        Write-Host "Executable introuvable apres extraction." -ForegroundColor Red
-        exit 1
-    }
+$found = Get-ChildItem -Path $TempExtract -Filter "*.exe" -Recurse | Select-Object -First 1
+if ($found) {
+    Move-Item $found.FullName $ExePath -Force
+} else {
+    Write-Host "Executable introuvable apres extraction." -ForegroundColor Red
+    exit 1
 }
+Remove-Item $TempExtract -Recurse -Force -ErrorAction SilentlyContinue
 
 # ---------- Creation de la tache planifiee ----------
 Write-Host "Creation de la tache planifiee..." -ForegroundColor Cyan
