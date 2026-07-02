@@ -126,14 +126,37 @@ $env:PORT    = [string]$cfg.Port
 $env:HUB_URL = $cfg.Url
 $env:TOKEN   = $cfg.Token
 
+$logFile = "$PSScriptRoot\beszel-agent.log"
+
+function Write-Log {
+    param([string]$Level, [string]$Message)
+    $line = "{0} [{1}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Level, $Message
+    Add-Content -Path $logFile -Value $line -Encoding UTF8
+}
+
+if ((Test-Path $logFile) -and (Get-Item $logFile).Length -gt 1MB) {
+    Move-Item $logFile "$logFile.old" -Force
+}
+
+Write-Log "INFO" "Watchdog demarre (port surveille : $($cfg.Port))"
+
 while ($true) {
     $proc = Start-Process -FilePath "$PSScriptRoot\beszel-agent.exe" -PassThru -NoNewWindow
+    Write-Log "START" "Agent demarre (PID $($proc.Id))"
+
+    $killedAsZombie = $false
     while (-not $proc.HasExited) {
         Start-Sleep -Seconds 30
         if (-not (netstat -ano | Select-String ":$($cfg.Port).*LISTENING")) {
+            Write-Log "ZOMBIE" "Port $($cfg.Port) plus en ecoute - kill force (PID $($proc.Id))"
             Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            $killedAsZombie = $true
             break
         }
+    }
+
+    if (-not $killedAsZombie) {
+        Write-Log "EXIT" "Agent termine (code : $($proc.ExitCode)) - redemarrage dans 5s"
     }
     Start-Sleep -Seconds 5
 }
