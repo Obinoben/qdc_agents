@@ -125,7 +125,18 @@ $env:KEY     = $cfg.Key
 $env:PORT    = [string]$cfg.Port
 $env:HUB_URL = $cfg.Url
 $env:TOKEN   = $cfg.Token
-& "$PSScriptRoot\beszel-agent.exe"
+
+while ($true) {
+    $proc = Start-Process -FilePath "$PSScriptRoot\beszel-agent.exe" -PassThru -NoNewWindow
+    while (-not $proc.HasExited) {
+        Start-Sleep -Seconds 30
+        if (-not (netstat -ano | Select-String ":$($cfg.Port).*LISTENING")) {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            break
+        }
+    }
+    Start-Sleep -Seconds 5
+}
 '@ | Set-Content -Path $WrapperPath -Encoding UTF8
 
 $action    = New-ScheduledTaskAction `
