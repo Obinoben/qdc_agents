@@ -127,7 +127,8 @@ $env:PORT    = [string]$cfg.Port
 $env:HUB_URL = $cfg.Url
 $env:TOKEN   = $cfg.Token
 
-$logFile = "$PSScriptRoot\beszel-agent.log"
+$logFile   = "$PSScriptRoot\beszel-agent.log"
+$agentOut  = "$PSScriptRoot\beszel-agent-output.log"
 
 function Write-Log {
     param([string]$Level, [string]$Message)
@@ -135,30 +136,54 @@ function Write-Log {
     Add-Content -Path $logFile -Value $line -Encoding UTF8
 }
 
+function Test-AgentStuck {
+    param([string]$Path, [int]$GraceMinutes = 3)
+
+    if (-not (Test-Path $Path)) { return $false }
+
+    try { $tail = Get-Content $Path -Tail 60 -ErrorAction Stop } catch { return $false }
+    if (-not $tail) { return $false }
+
+    $lastGoodIdx = -1
+    $lastBadIdx  = -1
+    for ($i = 0; $i -lt $tail.Count; $i++) {
+        if ($tail[$i] -match "WebSocket connected")                              { $lastGoodIdx = $i }
+        if ($tail[$i] -match "WebSocket connection failed|Disconnected from hub") { $lastBadIdx  = $i }
+    }
+
+    if ($lastBadIdx -lt 0) { return $false }                # jamais eu de souci recent
+    if ($lastGoodIdx -gt $lastBadIdx) { return $false }      # reconnecte depuis -> ok
+
+    if ($tail[$lastBadIdx] -match '^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})') {
+        $ts = [datetime]::ParseExact($matches[1], "yyyy/MM/dd HH:mm:ss", $null)
+        return ((Get-Date) - $ts) -gt (New-TimeSpan -Minutes $GraceMinutes)
+    }
+    return $false
+}
+
 if ((Test-Path $logFile) -and (Get-Item $logFile).Length -gt 1MB) {
     Move-Item $logFile "$logFile.old" -Force
 }
 
-Write-Log "INFO" "Watchdog demarre (port surveille : $($cfg.Port))"
+Write-Log "INFO" "Watchdog demarre"
 
 while ($true) {
-    $proc = Start-Process -FilePath "$PSScriptRoot\beszel-agent.exe" -PassThru -NoNewWindow
+    $proc = Start-Process -FilePath "$PSScriptRoot\beszel-agent.exe" `
+                           -RedirectStandardOutput $agentOut `
+                           -RedirectStandardError "$agentOut.err" `
+                           -PassThru -NoNewWindow
     Write-Log "START" "Agent demarre (PID $($proc.Id))"
 
-    $killedAsZombie = $false
     while (-not $proc.HasExited) {
-        Start-Sleep -Seconds 30
-        if (-not (netstat -ano | Select-String ":$($cfg.Port).*LISTENING")) {
-            Write-Log "ZOMBIE" "Port $($cfg.Port) plus en ecoute - kill force (PID $($proc.Id))"
+        Start-Sleep -Seconds 60
+        if (Test-AgentStuck -Path $agentOut -GraceMinutes 3) {
+            Write-Log "STUCK" "Pas de reconnexion depuis 3+ min - kill force (PID $($proc.Id))"
             Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-            $killedAsZombie = $true
             break
         }
     }
 
-    if (-not $killedAsZombie) {
-        Write-Log "EXIT" "Agent termine (code : $($proc.ExitCode)) - redemarrage dans 5s"
-    }
+    Write-Log "EXIT" "Agent termine (code : $($proc.ExitCode)) - redemarrage dans 5s"
     Start-Sleep -Seconds 5
 }
 '@ | Set-Content -Path $WrapperPath -Encoding UTF8
