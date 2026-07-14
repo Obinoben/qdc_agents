@@ -100,9 +100,8 @@ try {
 # ---------- Extraction ----------
 Write-Host "Extraction..." -ForegroundColor Cyan
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$TempExtract = Join-Path $env:TEMP "beszel-extract"
-Remove-Item $TempExtract -Recurse -Force -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Path $TempExtract -Force | Out-Null
+$TempExtract = Join-Path $env:TEMP ("beszel-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $TempExtract | Out-Null
 [System.IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $TempExtract)
 Remove-Item $ZipPath -Force -ErrorAction SilentlyContinue
 
