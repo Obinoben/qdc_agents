@@ -107,6 +107,8 @@ Remove-Item $ZipPath -Force -ErrorAction SilentlyContinue
 
 $found = Get-ChildItem -Path $TempExtract -Filter "*.exe" -Recurse | Select-Object -First 1
 if ($found) {
+    Get-Process -Name $ServiceName -ErrorAction SilentlyContinue | Stop-Process -Force
+    Start-Sleep -Seconds 1
     Remove-Item -Path $ExePath -Force -ErrorAction SilentlyContinue
     Move-Item $found.FullName $ExePath
 } else {
