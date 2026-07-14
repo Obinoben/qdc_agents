@@ -107,7 +107,8 @@ Remove-Item $ZipPath -Force -ErrorAction SilentlyContinue
 
 $found = Get-ChildItem -Path $TempExtract -Filter "*.exe" -Recurse | Select-Object -First 1
 if ($found) {
-    Move-Item $found.FullName $ExePath -Force
+    Remove-Item -Path $ExePath -Force -ErrorAction SilentlyContinue
+    Move-Item $found.FullName $ExePath
 } else {
     Write-Host "Executable introuvable apres extraction." -ForegroundColor Red
     exit 1
